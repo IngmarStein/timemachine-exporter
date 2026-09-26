@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go vet ./...
+
+      - run: go build -v ./...
+
+      - name: Smoke test
+        run: |
+          ./timemachine-exporter -socket="$RUNNER_TEMP/timemachine.sock" -port= &
+          exporter_pid=$!
+          trap 'kill "$exporter_pid" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 20); do
+            [ -S "$RUNNER_TEMP/timemachine.sock" ] && break
+            sleep 0.5
+          done
+
+          curl -sS --unix-socket "$RUNNER_TEMP/timemachine.sock" http://localhost/metrics \
+            | tee /dev/stderr \
+            | grep -q '^timemachine_backup_running'
